@@ -63,15 +63,9 @@ The script creates the following network topology:
 ```
 [vmbr0 (10.40.0.x)] ←→ [Router0] ←→ [wan0 (192.168.200.x)]
                                             ↑
-                                      [NextRouter]
+                                      [NextRouter] ←→ [lan0 (192.168.100.x)] ←→ [LAN0 VMs (192.168.100.101-103)]
                                             ↓
 [vmbr0 (10.40.0.x)] ←→ [Router1] ←→ [wan1 (192.168.201.x)]
-                                            ↑
-                                      [NextRouter]
-                                            ↓
-                                    [lan0 (192.168.100.x)]
-                                            ↓
-                              [LAN0 VMs (192.168.100.101-103)]
 ```
 
 ## Features

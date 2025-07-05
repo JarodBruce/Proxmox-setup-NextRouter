@@ -469,11 +469,7 @@ CREATE_PIDS+=($!)
 echo "Waiting for all VM creation processes to complete..."
 for pid in "${CREATE_PIDS[@]}"; do
     if ! wait $pid; then
-        echo "Error: A VM creation process failed. Attempting to force start remaining VMs..."
-        for vm_id in ${ROUTER0_VM_ID} ${ROUTER1_VM_ID} ${NEXTROUTER_VM_ID} ${LAN0_VM1_ID} ${LAN0_VM2_ID} ${LAN0_VM3_ID}; do
-            echo "Force starting VM ${vm_id}..."
-            qm start ${vm_id} || echo "Failed to force start VM ${vm_id}. Check Proxmox logs."
-        done
+        echo "Error: A VM creation process failed. Check logs for details."
         # Optional: kill remaining background jobs
         # kill "${CREATE_PIDS[@]}"
         exit 1

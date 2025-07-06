@@ -1,7 +1,6 @@
 #cloud-config
 package_update: true
 packages:
-  - nftables
   - net-tools
   - curl
   - wget
@@ -18,7 +17,6 @@ chpasswd:
       type: text
 
 runcmd:
-  # 0. Configure SSH for password authentication only
   - |
     cat > /etc/ssh/sshd_config << 'EOSSH'
     Port 22
@@ -34,63 +32,5 @@ runcmd:
     Subsystem sftp /usr/lib/openssh/sftp-server
     EOSSH
   - systemctl restart sshd
-  
-  # 1. Enable IP Forwarding
-  - echo "net.ipv4.ip_forward=1" > /etc/sysctl.d/99-ip_forward.conf
-  - sysctl -p /etc/sysctl.d/99-ip_forward.conf
-
-  # 1.5. Configure DNS
-  - |
-    if [ -n "${dns_servers}" ]; then
-      echo "nameserver $(echo ${dns_servers} | sed 's/,/\nnameserver /g')" > /etc/resolv.conf
-    fi
-
-  # 2. Create nftables configuration for NextRouter
-  - |
-    cat > /etc/nftables.conf << 'EONFT'
-    #!/usr/sbin/nft -f
-
-    flush ruleset
-
-    table inet filter {
-        chain input {
-            type filter hook input priority 0; policy accept;
-            
-            # Allow loopback traffic
-            iifname "lo" accept
-            
-            # Allow established and related connections
-            ct state established,related accept
-            
-            # Allow SSH access from all interfaces
-            tcp dport 22 accept
-        }
-
-        chain forward {
-            type filter hook forward priority 0; policy accept;
-            
-            # Allow all forwarding for NextRouter
-            # This VM acts as a bridge between networks
-        }
-
-        chain output {
-            type filter hook output priority 0; policy accept;
-        }
-    }
-
-    table inet nat {
-        chain postrouting {
-            type nat hook postrouting priority 100; policy accept;
-            
-            # No NAT rules - NextRouter acts as a bridge
-        }
-    }
-    EONFT
-
-  # 3. Enable and start nftables
-  - systemctl enable nftables
-  - systemctl restart nftables
-
-  # 4. Basic system setup
   - apt-get update
   - apt-get upgrade -y

@@ -73,6 +73,21 @@ echo
 # Exit immediately if a command exits with a non-zero status.
 set -euo pipefail
 
+# Function to generate a unique MAC address based on VM ID
+generate_mac_address() {
+    local vm_id=$1
+    local interface_num=$2
+    # Generate MAC address in format: 02:XX:XX:XX:XX:XX
+    # Using 02 as first octet (locally administered unicast)
+    # VM ID in second octet, interface number in third octet
+    printf "02:%02x:%02x:%02x:%02x:%02x" \
+        $((vm_id % 256)) \
+        $((interface_num % 256)) \
+        $((RANDOM % 256)) \
+        $((RANDOM % 256)) \
+        $((RANDOM % 256))
+}
+
 # Function to process cloud-config template with variable substitution
 process_cloud_config_template() {
     local template_file="$1"
@@ -218,10 +233,14 @@ create_router_vm() {
     qm set ${vm_id} --cicustom "vendor=local:snippets/${snippet_filename}"
     mv "${temp_ci_file}" "/var/lib/vz/snippets/${snippet_filename}"
 
-    # Attach network devices
+    # Attach network devices with unique MAC addresses
     echo "Attaching network interfaces to VM ${vm_id}..."
-    qm set ${vm_id} --net0 virtio,bridge=${LAN_BRIDGE}
-    qm set ${vm_id} --net1 virtio,bridge=${wan_bridge}
+    local mac_lan=$(generate_mac_address ${vm_id} 0)
+    local mac_wan=$(generate_mac_address ${vm_id} 1)
+    echo "  - eth0: ${LAN_BRIDGE} (LAN) - MAC: ${mac_lan}"
+    echo "  - eth1: ${wan_bridge} (WAN) - MAC: ${mac_wan}"
+    qm set ${vm_id} --net0 virtio,bridge=${LAN_BRIDGE},macaddr=${mac_lan}
+    qm set ${vm_id} --net1 virtio,bridge=${wan_bridge},macaddr=${mac_wan}
     
     echo "VM ${vm_id} (${vm_name}) configured successfully."
     echo
@@ -320,11 +339,17 @@ create_nextrouter_vm() {
     qm set ${vm_id} --cicustom "vendor=local:snippets/${snippet_filename}"
     mv "${temp_ci_file}" "/var/lib/vz/snippets/${snippet_filename}"
 
-    # Attach network devices (wan0, wan1, lan0)
+    # Attach network devices (wan0, wan1, lan0) with unique MAC addresses
     echo "Attaching network interfaces to NextRouter VM ${vm_id}..."
-    qm set ${vm_id} --net0 virtio,bridge=${WAN1_BRIDGE}
-    qm set ${vm_id} --net1 virtio,bridge=${WAN2_BRIDGE}
-    qm set ${vm_id} --net2 virtio,bridge=${UNUSED_BRIDGE}
+    local mac_wan0=$(generate_mac_address ${vm_id} 0)
+    local mac_wan1=$(generate_mac_address ${vm_id} 1)
+    local mac_lan0=$(generate_mac_address ${vm_id} 2)
+    echo "  - eth0: ${WAN1_BRIDGE} (WAN0) - MAC: ${mac_wan0}"
+    echo "  - eth1: ${WAN2_BRIDGE} (WAN1) - MAC: ${mac_wan1}"
+    echo "  - eth2: ${UNUSED_BRIDGE} (LAN0) - MAC: ${mac_lan0}"
+    qm set ${vm_id} --net0 virtio,bridge=${WAN1_BRIDGE},macaddr=${mac_wan0}
+    qm set ${vm_id} --net1 virtio,bridge=${WAN2_BRIDGE},macaddr=${mac_wan1}
+    qm set ${vm_id} --net2 virtio,bridge=${UNUSED_BRIDGE},macaddr=${mac_lan0}
     
     echo "NextRouter VM ${vm_id} (${vm_name}) configured successfully."
     echo
@@ -401,9 +426,11 @@ create_lan0_vm() {
     qm set ${vm_id} --cicustom "vendor=local:snippets/${snippet_filename}"
     mv "${temp_ci_file}" "/var/lib/vz/snippets/${snippet_filename}"
 
-    # Attach network device to lan0
+    # Attach network device to lan0 with unique MAC address
     echo "Attaching network interface to VM ${vm_id}..."
-    qm set ${vm_id} --net0 virtio,bridge=${UNUSED_BRIDGE}
+    local mac_lan0=$(generate_mac_address ${vm_id} 0)
+    echo "  - eth0: ${UNUSED_BRIDGE} (LAN0) - MAC: ${mac_lan0}"
+    qm set ${vm_id} --net0 virtio,bridge=${UNUSED_BRIDGE},macaddr=${mac_lan0}
     
     echo "VM ${vm_id} (${vm_name}) configured successfully."
     echo
@@ -490,10 +517,11 @@ declare -a START_PIDS=()
 start_vm() {
     local vm_id=$1
     echo "Starting VM ${vm_id}..."
-    qm start ${vm_id}
     if ! qm start ${vm_id}; then
         echo "Error starting VM ${vm_id}. Please check the Proxmox task log."
+        return 1
     fi
+    echo "VM ${vm_id} started successfully."
 }
 
 # Start all VMs in parallel

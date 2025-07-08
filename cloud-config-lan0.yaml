@@ -15,6 +15,12 @@ chpasswd:
     - name: ${USER_NAME}
       password: password
       type: text
+      ssh_authorized_keys:
+        - ${SSH_PUBLIC_KEY}
+
+# SSH Keys
+ssh_authorized_keys:
+  - ${SSH_PUBLIC_KEY}
 
 runcmd:
   # 0. Configure SSH for password authentication only
@@ -22,7 +28,7 @@ runcmd:
     cat > /etc/ssh/sshd_config << 'EOSSH'
     Port 22
     PermitRootLogin yes
-    PubkeyAuthentication no
+    PubkeyAuthentication yes
     PasswordAuthentication yes
     PermitEmptyPasswords no
     ChallengeResponseAuthentication no

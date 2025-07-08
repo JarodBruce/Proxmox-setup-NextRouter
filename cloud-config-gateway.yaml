@@ -48,7 +48,7 @@ runcmd:
       echo "nameserver $(echo ${dns_servers} | sed 's/,/\nnameserver /g')" > /etc/resolv.conf
     fi
 
-  # 2. Configure DHCP Server
+  # 2. Configure DHCP Server for gateway0 network
   - |
     cat > /etc/dhcp/dhcpd.conf << 'EODHCP'
     # Global DHCP configuration
@@ -56,7 +56,7 @@ runcmd:
     max-lease-time 7200;
     authoritative;
     
-    # Subnet configuration for LAN interface (eth0)
+    # Subnet configuration for gateway0 interface (eth1)
     subnet ${subnet_network} netmask ${subnet_mask} {
       range ${dhcp_start} ${dhcp_end};
       option routers ${router_ip};
@@ -65,11 +65,11 @@ runcmd:
     }
     EODHCP
 
-  # 3. Configure DHCP server to listen on eth1 (WAN interface)
+  # 3. Configure DHCP server to listen on eth1 (gateway0 interface)
   - echo 'INTERFACESv4="eth1"' > /etc/default/isc-dhcp-server
   - echo 'INTERFACESv6=""' >> /etc/default/isc-dhcp-server
 
-  # 4. Create nftables configuration
+  # 4. Create nftables configuration for Gateway
   - |
     cat > /etc/nftables.conf << 'EONFT'
     #!/usr/sbin/nft -f
@@ -86,10 +86,10 @@ runcmd:
             # Allow established and related connections
             ct state established,related accept
             
-            # Allow SSH access from LAN
-            iifname "eth0" tcp dport 22 accept
+            # Allow SSH access from both interfaces
+            tcp dport 22 accept
             
-            # Allow DHCP traffic on WAN interface
+            # Allow DHCP traffic on gateway0 interface
             iifname "eth1" udp dport 67 accept
             iifname "eth1" udp sport 68 accept
             oifname "eth1" udp dport 67 accept
@@ -99,10 +99,10 @@ runcmd:
         chain forward {
             type filter hook forward priority 0; policy drop;
 
-            # Allow traffic from gateway network (eth0) to WAN network (eth1)
+            # Allow traffic from LAN (vmbr0/eth0) to gateway network (eth1)
             iifname "eth0" oifname "eth1" accept
 
-            # Allow traffic from WAN (NextRouter) to gateway network (eth0)
+            # Allow traffic from gateway network (eth1) to LAN (vmbr0/eth0)
             iifname "eth1" oifname "eth0" accept
         }
 
@@ -115,9 +115,9 @@ runcmd:
         chain postrouting {
             type nat hook postrouting priority 100; policy accept;
 
-            # NAPT: Masquerade traffic from gateway network going out to WAN interface
+            # NAPT: Masquerade traffic from LAN going out to gateway network
             oifname "eth1" masquerade
-            # NAPT: Masquerade traffic from NextRouter going out to gateway network
+            # NAPT: Masquerade traffic from gateway network going out to LAN (to internet)
             oifname "eth0" masquerade
         }
     }

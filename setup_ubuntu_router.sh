@@ -4,14 +4,15 @@
 # Proxmox Ubuntu Router Auto-Deploy Script (Parallel Edition)
 # ==============================================================================
 #
-# This script automates the creation of six Ubuntu VMs on Proxmox,
+# This script automates the creation of seven Ubuntu VMs on Proxmox,
 # configured to act as routers and clients using cloud-init and nftables.
 #
 # What it does:
-# 1. Creates three new Linux Bridges on the Proxmox host: wan0, wan1, lan0.
-# 2. Creates six Ubuntu VMs in parallel from a specified cloud-init ready template:
-#    - Router 0: Connected to vmbr0 ↔ wan0
-#    - Router 1: Connected to vmbr0 ↔ wan1
+# 1. Creates four new Linux Bridges on the Proxmox host: gateway0, wan0, wan1, lan0.
+# 2. Creates seven Ubuntu VMs in parallel from a specified cloud-init ready template:
+#    - Gateway: Connected to vmbr0 ↔ gateway0 (main gateway with NAPT)
+#    - Router 0: Connected to gateway0 ↔ wan0
+#    - Router 1: Connected to gateway0 ↔ wan1
 #    - NextRouter: Connected to wan0 ↔ wan1 ↔ lan0 (multi-homed bridge)
 #    - LAN0 VM 1-3: Connected to lan0 (client VMs)
 # 3. Uses cloud-init to:
@@ -46,11 +47,12 @@ fi
 echo "=========================================="
 echo "Configuration loaded successfully:"
 echo "Template VM ID: ${TEMPLATE_VM_ID}"
+echo "Gateway VM: ${GATEWAY_VM_ID} (${GATEWAY_VM_NAME})"
 echo "Router VMs: ${ROUTER0_VM_ID} (${ROUTER0_VM_NAME}), ${ROUTER1_VM_ID} (${ROUTER1_VM_NAME})"
 echo "NextRouter VM: ${NEXTROUTER_VM_ID} (${NEXTROUTER_VM_NAME})"
 echo "LAN0 VMs: ${LAN0_VM1_ID}, ${LAN0_VM2_ID}, ${LAN0_VM3_ID}"
 echo "VM Resources: ${MEMORY}MB RAM, ${CORES} cores, ${DISK_SIZE} disk"
-echo "Bridges: ${LAN_BRIDGE}, ${WAN1_BRIDGE}, ${WAN2_BRIDGE}, ${UNUSED_BRIDGE}"
+echo "Bridges: ${LAN_BRIDGE}, ${GATEWAY_BRIDGE}, ${WAN1_BRIDGE}, ${WAN2_BRIDGE}, ${UNUSED_BRIDGE}"
 echo "=========================================="
 echo
 
@@ -99,8 +101,13 @@ process_cloud_config_template() {
         exit 1
     fi
     
+    echo "Processing cloud-config template: $template_file -> $output_file"
+    
     # Process template with variable substitution
     envsubst < "$template_file" > "$output_file"
+    
+    echo "Cloud-config file generated successfully at: $output_file"
+    echo "File size: $(wc -l < "$output_file") lines"
 }
 
 # Function to add a bridge to /etc/network/interfaces if it doesn't exist
@@ -124,7 +131,7 @@ EOF
 }
 
 echo "### 1. Creating Virtual Bridges on Proxmox Host ###"
-echo "Creating bridges: ${WAN1_BRIDGE}, ${WAN2_BRIDGE}, ${UNUSED_BRIDGE}"
+echo "Creating bridges: ${GATEWAY_BRIDGE}, ${WAN1_BRIDGE}, ${WAN2_BRIDGE}, ${UNUSED_BRIDGE}"
 echo "Note: ${LAN_BRIDGE} (vmbr0) should already exist as the main bridge"
 echo "Note: ${UNUSED_BRIDGE} will be used for lan0 VMs"
 # A flag to track if a network restart is needed
@@ -132,6 +139,7 @@ network_changed=false
 
 # Add bridges and track if changes were made
 # Note: We don't add vmbr0 as it should already exist
+add_bridge_if_not_exists ${GATEWAY_BRIDGE} && network_changed=true
 add_bridge_if_not_exists ${WAN1_BRIDGE} && network_changed=true
 add_bridge_if_not_exists ${WAN2_BRIDGE} && network_changed=true
 add_bridge_if_not_exists ${UNUSED_BRIDGE} && network_changed=true
@@ -140,7 +148,7 @@ add_bridge_if_not_exists ${UNUSED_BRIDGE} && network_changed=true
 if [ "$network_changed" = true ]; then
     echo "Applying network changes..."
     ifreload -a
-    echo "Bridges ${WAN1_BRIDGE}, ${WAN2_BRIDGE}, ${UNUSED_BRIDGE} are ready."
+    echo "Bridges ${GATEWAY_BRIDGE}, ${WAN1_BRIDGE}, ${WAN2_BRIDGE}, ${UNUSED_BRIDGE} are ready."
 else
     echo "All required bridges already configured."
 fi
@@ -190,7 +198,7 @@ create_router_vm() {
 
     # Network configuration
     echo "Setting network interfaces for VM ${vm_id}..."
-    echo "  - eth0: ${LAN_BRIDGE} (LAN) - ${lan_ip}, gateway: ${lan_gateway}"
+    echo "  - eth0: ${GATEWAY_BRIDGE} (Gateway Network) - ${lan_ip}, gateway: ${lan_gateway}"
     echo "  - eth1: ${wan_bridge} (WAN) - ${wan_ip}, gateway: ${wan_gateway}"
     
     # Configure ipconfig with gateway if specified
@@ -226,6 +234,14 @@ create_router_vm() {
     export USER_NAME SSH_PUBLIC_KEY dns_servers
     export subnet_network dhcp_start dhcp_end router_ip broadcast_ip subnet_mask
     
+    echo "Debug: Exported variables for cloud-config:"
+    echo "  subnet_network: ${subnet_network}"
+    echo "  dhcp_start: ${dhcp_start}"
+    echo "  dhcp_end: ${dhcp_end}"
+    echo "  router_ip: ${router_ip}"
+    echo "  broadcast_ip: ${broadcast_ip}"
+    echo "  subnet_mask: ${subnet_mask}"
+    
     # Process cloud-config template
     process_cloud_config_template "$(dirname "$0")/${ROUTER_CLOUD_CONFIG}" "${temp_ci_file}"
 
@@ -237,9 +253,9 @@ create_router_vm() {
     echo "Attaching network interfaces to VM ${vm_id}..."
     local mac_lan=$(generate_mac_address ${vm_id} 0)
     local mac_wan=$(generate_mac_address ${vm_id} 1)
-    echo "  - eth0: ${LAN_BRIDGE} (LAN) - MAC: ${mac_lan}"
+    echo "  - eth0: ${GATEWAY_BRIDGE} (Gateway Network) - MAC: ${mac_lan}"
     echo "  - eth1: ${wan_bridge} (WAN) - MAC: ${mac_wan}"
-    qm set ${vm_id} --net0 virtio,bridge=${LAN_BRIDGE},macaddr=${mac_lan}
+    qm set ${vm_id} --net0 virtio,bridge=${GATEWAY_BRIDGE},macaddr=${mac_lan}
     qm set ${vm_id} --net1 virtio,bridge=${wan_bridge},macaddr=${mac_wan}
     
     echo "VM ${vm_id} (${vm_name}) configured successfully."
@@ -436,34 +452,160 @@ create_lan0_vm() {
     echo
 }
 
-# Create VMs sequentially to avoid storage lock conflicts
-echo "### 3. Creating Virtual Machines in Parallel ###"
-echo "Starting parallel VM creation. This may take a few minutes..."
+# Function to create Gateway VM (connected to vmbr0 ↔ gateway0)
+create_gateway_vm() {
+    local vm_id=$1
+    local vm_name=$2
+    local lan_ip=$3
+    local lan_gateway=$4
+    local wan_ip=$5
+    local wan_gateway=$6
+    local dns_servers=$7
+    
+    echo "Creating Gateway VM ${vm_id} (${vm_name})..."
+    
+    # Stop and destroy the VM if it already exists to ensure a clean slate
+    if qm status ${vm_id} >/dev/null 2>&1; then
+        echo "VM ${vm_id} already exists. Stopping and destroying it for a fresh start."
+        qm stop ${vm_id} --timeout 60 || true # Allow failure if already stopped
+        qm destroy ${vm_id}
+        # Wait for cleanup to complete
+        sleep 2
+    fi
+
+    echo "Cloning template ${TEMPLATE_VM_ID} to new VM ${vm_id}..."
+    qm clone ${TEMPLATE_VM_ID} ${vm_id} --name "${vm_name}" --full
+    
+    # Wait a moment for the clone operation to complete
+    sleep 2
+    
+    echo "Configuring VM resources..."
+    qm resize ${vm_id} scsi0 ${DISK_SIZE}
+    qm set ${vm_id} --memory ${MEMORY} --cores ${CORES}
+    
+    # Set display to Standard VGA
+    echo "Setting display to Standard VGA for VM ${vm_id}..."
+    qm set ${vm_id} --vga std
+    
+    # Cloud-Init User configuration
+    qm set ${vm_id} --ciuser "${USER_NAME}"
+    echo "Setting password authentication for VM ${vm_id}..."
+    qm set ${vm_id} --cipassword "password"
+
+    # Network configuration
+    echo "Setting network interfaces for VM ${vm_id}..."
+    echo "  - eth0: ${LAN_BRIDGE} (LAN) - ${lan_ip}, gateway: ${lan_gateway}"
+    echo "  - eth1: ${GATEWAY_BRIDGE} (Gateway Network) - ${wan_ip}, gateway: ${wan_gateway}"
+    
+    # Configure ipconfig with gateway if specified
+    if [ -n "${lan_gateway}" ] && [ "${lan_gateway}" != "" ]; then
+        qm set ${vm_id} --ipconfig0 "ip=${lan_ip},gw=${lan_gateway}"
+    else
+        qm set ${vm_id} --ipconfig0 "ip=${lan_ip}"
+    fi
+    
+    if [ -n "${wan_gateway}" ] && [ "${wan_gateway}" != "" ]; then
+        qm set ${vm_id} --ipconfig1 "ip=${wan_ip},gw=${wan_gateway}"
+    else
+        qm set ${vm_id} --ipconfig1 "ip=${wan_ip}"
+    fi
+
+    qm set ${vm_id} --nameserver "${dns_servers}"
+    qm set ${vm_id} --searchdomain "${DOMAIN_NAME}"
+
+    # Custom cloud-init script for nftables, IP forwarding, and DHCP
+    temp_ci_file=$(mktemp)
+    snippet_filename="ci-${vm_id}-$(basename ${temp_ci_file}).yaml"
+    
+    # Calculate DHCP parameters based on Gateway network
+    local wan_network=$(echo "${wan_ip}" | cut -d'/' -f1 | cut -d'.' -f1-3)
+    local router_ip=$(echo "${wan_ip}" | cut -d'/' -f1)
+    local dhcp_start="${wan_network}.100"
+    local dhcp_end="${wan_network}.200"
+    local broadcast_ip="${wan_network}.255"
+    local subnet_mask="255.255.255.0"
+    local subnet_network="${wan_network}.0"
+    
+    # Export variables for envsubst
+    export USER_NAME SSH_PUBLIC_KEY dns_servers
+    export subnet_network dhcp_start dhcp_end router_ip broadcast_ip subnet_mask
+    
+    # Process cloud-config template
+    process_cloud_config_template "$(dirname "$0")/${GATEWAY_CLOUD_CONFIG}" "${temp_ci_file}"
+
+    echo "Applying custom cloud-init configuration for VM ${vm_id}..."
+    qm set ${vm_id} --cicustom "vendor=local:snippets/${snippet_filename}"
+    mv "${temp_ci_file}" "/var/lib/vz/snippets/${snippet_filename}"
+
+    # Attach network devices with unique MAC addresses
+    echo "Attaching network interfaces to Gateway VM ${vm_id}..."
+    local mac_lan=$(generate_mac_address ${vm_id} 0)
+    local mac_wan=$(generate_mac_address ${vm_id} 1)
+    echo "  - eth0: ${LAN_BRIDGE} (LAN) - MAC: ${mac_lan}"
+    echo "  - eth1: ${GATEWAY_BRIDGE} (Gateway Network) - MAC: ${mac_wan}"
+    qm set ${vm_id} --net0 virtio,bridge=${LAN_BRIDGE},macaddr=${mac_lan}
+    qm set ${vm_id} --net1 virtio,bridge=${GATEWAY_BRIDGE},macaddr=${mac_wan}
+    
+    echo "Gateway VM ${vm_id} (${vm_name}) configured successfully."
+    echo
+}
+
+# Create VMs in batches to avoid storage lock conflicts
+echo "### 3. Creating Virtual Machines in Batches (3 VMs at a time) ###"
+echo "Starting VM creation in batches to reduce server load..."
 echo "========================================================"
 
-# Array to store background process IDs
-declare -a CREATE_PIDS=()
+# Function to wait for batch completion
+wait_for_batch() {
+    local batch_name="$1"
+    shift
+    local pids=("$@")
+    
+    echo "Waiting for batch '${batch_name}' to complete..."
+    for pid in "${pids[@]}"; do
+        if ! wait $pid; then
+            echo "Error: A VM creation process in batch '${batch_name}' failed. Check logs for details."
+            exit 1
+        fi
+    done
+    echo "Batch '${batch_name}' completed successfully!"
+    echo
+}
 
-# Create Router VMs in parallel
+# Batch 1: Gateway + 2 Router VMs
+echo "Creating Batch 1: Gateway, Router0, Router1"
+declare -a BATCH1_PIDS=()
+
+(
+    create_gateway_vm "${GATEWAY_VM_ID}" "${GATEWAY_VM_NAME}" \
+        "${GATEWAY_LAN_IP_CIDR}" "${GATEWAY_LAN_GATEWAY}" \
+        "${GATEWAY_WAN_IP_CIDR}" "${GATEWAY_WAN_GATEWAY}" \
+        "${GATEWAY_DNS}"
+) &
+BATCH1_PIDS+=($!)
+
 (
     create_router_vm "${ROUTER0_VM_ID}" "${ROUTER0_VM_NAME}" \
         "${ROUTER0_LAN_IP_CIDR}" "${ROUTER0_LAN_GATEWAY}" \
         "${ROUTER0_WAN_IP_CIDR}" "${ROUTER0_WAN_GATEWAY}" \
-        "${WAN1_BRIDGE}" "${ROUTER0_DNS}" \
-        "${ROUTER0_DHCP_START}" "${ROUTER0_DHCP_END}"
+        "${WAN1_BRIDGE}" "${ROUTER0_DNS}"
 ) &
-CREATE_PIDS+=($!)
+BATCH1_PIDS+=($!)
 
 (
     create_router_vm "${ROUTER1_VM_ID}" "${ROUTER1_VM_NAME}" \
         "${ROUTER1_LAN_IP_CIDR}" "${ROUTER1_LAN_GATEWAY}" \
         "${ROUTER1_WAN_IP_CIDR}" "${ROUTER1_WAN_GATEWAY}" \
-        "${WAN2_BRIDGE}" "${ROUTER1_DNS}" \
-        "${ROUTER1_DHCP_START}" "${ROUTER1_DHCP_END}"
+        "${WAN2_BRIDGE}" "${ROUTER1_DNS}"
 ) &
-CREATE_PIDS+=($!)
+BATCH1_PIDS+=($!)
 
-# Create NextRouter VM in parallel
+wait_for_batch "Batch 1" "${BATCH1_PIDS[@]}"
+
+# Batch 2: NextRouter + 2 LAN0 VMs
+echo "Creating Batch 2: NextRouter, LAN0-VM1, LAN0-VM2"
+declare -a BATCH2_PIDS=()
+
 (
     create_nextrouter_vm "${NEXTROUTER_VM_ID}" "${NEXTROUTER_VM_NAME}" \
         "${NEXTROUTER_WAN0_IP_CIDR}" "${NEXTROUTER_WAN0_GATEWAY}" \
@@ -471,39 +613,35 @@ CREATE_PIDS+=($!)
         "${NEXTROUTER_LAN0_IP_CIDR}" "${NEXTROUTER_LAN0_GATEWAY}" \
         "${NEXTROUTER_DNS}"
 ) &
-CREATE_PIDS+=($!)
+BATCH2_PIDS+=($!)
 
-# Create LAN0 VMs in parallel
 (
     create_lan0_vm "${LAN0_VM1_ID}" "${LAN0_VM1_NAME}" \
         "${LAN0_VM1_IP_CIDR}" "${LAN0_VM1_GATEWAY}" "${LAN0_VM1_DNS}"
 ) &
-CREATE_PIDS+=($!)
+BATCH2_PIDS+=($!)
 
 (
     create_lan0_vm "${LAN0_VM2_ID}" "${LAN0_VM2_NAME}" \
         "${LAN0_VM2_IP_CIDR}" "${LAN0_VM2_GATEWAY}" "${LAN0_VM2_DNS}"
 ) &
-CREATE_PIDS+=($!)
+BATCH2_PIDS+=($!)
+
+wait_for_batch "Batch 2" "${BATCH2_PIDS[@]}"
+
+# Batch 3: Remaining LAN0 VM
+echo "Creating Batch 3: LAN0-VM3"
+declare -a BATCH3_PIDS=()
 
 (
     create_lan0_vm "${LAN0_VM3_ID}" "${LAN0_VM3_NAME}" \
         "${LAN0_VM3_IP_CIDR}" "${LAN0_VM3_GATEWAY}" "${LAN0_VM3_DNS}"
 ) &
-CREATE_PIDS+=($!)
+BATCH3_PIDS+=($!)
 
-# Wait for all creation processes to complete
-echo "Waiting for all VM creation processes to complete..."
-for pid in "${CREATE_PIDS[@]}"; do
-    if ! wait $pid; then
-        echo "Error: A VM creation process failed. Check logs for details."
-        # Optional: kill remaining background jobs
-        # kill "${CREATE_PIDS[@]}"
-        exit 1
-    fi
-done
+wait_for_batch "Batch 3" "${BATCH3_PIDS[@]}"
 
-echo "All VM creation processes completed successfully!"
+echo "All VM creation batches completed successfully!"
 echo
 
 echo "========================================================"
@@ -525,6 +663,8 @@ start_vm() {
 }
 
 # Start all VMs in parallel
+( start_vm ${GATEWAY_VM_ID} ) &
+START_PIDS+=($!)
 ( start_vm ${ROUTER0_VM_ID} ) &
 START_PIDS+=($!)
 ( start_vm ${ROUTER1_VM_ID} ) &
@@ -551,11 +691,14 @@ echo "========================================================"
 echo "### Deployment Summary ###"
 echo "========================================================"
 echo "The following VMs have been created and started:"
+echo "  - Gateway (${GATEWAY_VM_NAME}): VM ${GATEWAY_VM_ID}"
+echo "    - LAN (eth0): ${GATEWAY_LAN_IP_CIDR} on ${LAN_BRIDGE}"
+echo "    - Gateway Network (eth1): ${GATEWAY_WAN_IP_CIDR} on ${GATEWAY_BRIDGE}"
 echo "  - Router 0 (${ROUTER0_VM_NAME}): VM ${ROUTER0_VM_ID}"
-echo "    - LAN (eth0): ${ROUTER0_LAN_IP_CIDR} on ${LAN_BRIDGE}"
+echo "    - Gateway Network (eth0): ${ROUTER0_LAN_IP_CIDR} on ${GATEWAY_BRIDGE}"
 echo "    - WAN (eth1): ${ROUTER0_WAN_IP_CIDR} on ${WAN1_BRIDGE}"
 echo "  - Router 1 (${ROUTER1_VM_NAME}): VM ${ROUTER1_VM_ID}"
-echo "    - LAN (eth0): ${ROUTER1_LAN_IP_CIDR} on ${LAN_BRIDGE}"
+echo "    - Gateway Network (eth0): ${ROUTER1_LAN_IP_CIDR} on ${GATEWAY_BRIDGE}"
 echo "    - WAN (eth1): ${ROUTER1_WAN_IP_CIDR} on ${WAN2_BRIDGE}"
 echo "  - NextRouter (${NEXTROUTER_VM_NAME}): VM ${NEXTROUTER_VM_ID}"
 echo "    - WAN0 (eth0): ${NEXTROUTER_WAN0_IP_CIDR} on ${WAN1_BRIDGE}"

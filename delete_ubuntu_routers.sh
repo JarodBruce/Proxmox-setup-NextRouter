@@ -9,43 +9,37 @@
 #
 # ==============================================================================
 
-# --- Configuration (should match setup_ubuntu_router.sh) ---
-ROUTER0_VM_ID=9001           # ID for the first router VM
-ROUTER1_VM_ID=9002           # ID for the second router VM
-ROUTER0_VM_NAME="ubuntu-router-0"  # Name for the first router VM
-ROUTER1_VM_NAME="ubuntu-router-1"  # Name for the second router VM
-
-# NextRouter VM (connected to wan0, wan1, lan0)
-NEXTROUTER_VM_ID=9003       # ID for the NextRouter VM
-NEXTROUTER_VM_NAME="NextRouter"  # Name for the NextRouter VM
-
-# LAN0 Connected VMs
-LAN0_VM1_ID=9004            # ID for the first lan0 VM
-LAN0_VM2_ID=9005            # ID for the second lan0 VM
-LAN0_VM3_ID=9006            # ID for the third lan0 VM
-LAN0_VM1_NAME="ubuntu-lan0-1"  # Name for the first lan0 VM
-LAN0_VM2_NAME="ubuntu-lan0-2"  # Name for the second lan0 VM
-LAN0_VM3_NAME="ubuntu-lan0-3"  # Name for the third lan0 VM
-
-# Network Bridge Configuration
-WAN1_BRIDGE="wan0"   # First WAN network
-WAN2_BRIDGE="wan1"   # Second WAN network
-UNUSED_BRIDGE="lan0" # Additional bridge
+# --- Configuration ---
+# Load configuration from .env file
+ENV_FILE="$(dirname "$0")/.env"
+if [ -f "$ENV_FILE" ]; then
+    set -a  # Turn on automatic export
+    source "$ENV_FILE"
+    set +a  # Turn off automatic export
+    echo "Configuration loaded from $ENV_FILE"
+else
+    echo "Error: .env file not found at $ENV_FILE"
+    echo "Please ensure the .env file exists in the same directory as this script."
+    exit 1
+fi
 
 # --- Script Body ---
 set -euo pipefail
 
 echo "### Deleting Ubuntu Router VMs ###"
 echo ""
+echo "Configuration loaded from .env file:"
 echo "This will delete the following VMs:"
+echo "=== Gateway VM ==="
+echo "  - ${GATEWAY_VM_NAME} (VM ${GATEWAY_VM_ID})"
 echo "=== Router VMs ==="
-echo "  - Router 0 (VM ${ROUTER0_VM_ID}): ${ROUTER0_VM_NAME}"
-echo "  - Router 1 (VM ${ROUTER1_VM_ID}): ${ROUTER1_VM_NAME}"
-echo "  - NextRouter (VM ${NEXTROUTER_VM_ID}): ${NEXTROUTER_VM_NAME}"
+echo "  - ${ROUTER0_VM_NAME} (VM ${ROUTER0_VM_ID})"
+echo "  - ${ROUTER1_VM_NAME} (VM ${ROUTER1_VM_ID})"
+echo "  - ${NEXTROUTER_VM_NAME} (VM ${NEXTROUTER_VM_ID})"
 echo "=== LAN0 VMs ==="
-echo "  - LAN0 VM 1 (VM ${LAN0_VM1_ID}): ${LAN0_VM1_NAME}"
-echo "  - LAN0 VM 2 (VM ${LAN0_VM2_ID}): ${LAN0_VM2_NAME}"
-echo "  - LAN0 VM 3 (VM ${LAN0_VM3_ID}): ${LAN0_VM3_NAME}"
+echo "  - ${LAN0_VM1_NAME} (VM ${LAN0_VM1_ID})"
+echo "  - ${LAN0_VM2_NAME} (VM ${LAN0_VM2_ID})"
+echo "  - ${LAN0_VM3_NAME} (VM ${LAN0_VM3_ID})"
 echo ""
 read -p "Are you sure you want to continue? (y/N): " -n 1 -r
 echo
@@ -63,6 +57,20 @@ echo "Starting parallel VM deletion..."
 
 # Array to store background process IDs
 declare -a DELETE_PIDS=()
+
+# Stop and destroy Gateway VM
+echo "Deleting Gateway VM..."
+(
+    if qm status ${GATEWAY_VM_ID} >/dev/null 2>&1; then
+        echo "Stopping and deleting Gateway (VM ${GATEWAY_VM_ID})..."
+        qm stop ${GATEWAY_VM_ID} --timeout 60 || true
+        qm destroy ${GATEWAY_VM_ID}
+        echo "✓ Gateway (VM ${GATEWAY_VM_ID}) deleted."
+    else
+        echo "⚠ Gateway (VM ${GATEWAY_VM_ID}) not found."
+    fi
+) &
+DELETE_PIDS+=($!)
 
 # Stop and destroy Router VMs in parallel
 echo "Deleting Router VMs in parallel..."
@@ -159,7 +167,7 @@ echo
 # Clean up cloud-init files
 echo "Cleaning up cloud-init files..."
 removed_files=0
-for file in /var/lib/vz/snippets/ci-${ROUTER0_VM_ID}-*.yaml /var/lib/vz/snippets/ci-${ROUTER1_VM_ID}-*.yaml /var/lib/vz/snippets/ci-${NEXTROUTER_VM_ID}-*.yaml /var/lib/vz/snippets/ci-${LAN0_VM1_ID}-*.yaml /var/lib/vz/snippets/ci-${LAN0_VM2_ID}-*.yaml /var/lib/vz/snippets/ci-${LAN0_VM3_ID}-*.yaml; do
+for file in /var/lib/vz/snippets/ci-${GATEWAY_VM_ID}-*.yaml /var/lib/vz/snippets/ci-${ROUTER0_VM_ID}-*.yaml /var/lib/vz/snippets/ci-${ROUTER1_VM_ID}-*.yaml /var/lib/vz/snippets/ci-${NEXTROUTER_VM_ID}-*.yaml /var/lib/vz/snippets/ci-${LAN0_VM1_ID}-*.yaml /var/lib/vz/snippets/ci-${LAN0_VM2_ID}-*.yaml /var/lib/vz/snippets/ci-${LAN0_VM3_ID}-*.yaml; do
     if [[ -f "$file" ]]; then
         rm -f "$file"
         echo "✓ Removed: $(basename "$file")"
@@ -178,16 +186,19 @@ echo "========================================================"
 echo "### Deletion Complete ###"
 echo ""
 echo "The following VMs have been deleted:"
+echo "=== Gateway VM ==="
+echo "  - ${GATEWAY_VM_NAME} (VM ${GATEWAY_VM_ID})"
 echo "=== Router VMs ==="
-echo "  - Router 0 (VM ${ROUTER0_VM_ID}): ${ROUTER0_VM_NAME}"
-echo "  - Router 1 (VM ${ROUTER1_VM_ID}): ${ROUTER1_VM_NAME}"
-echo "  - NextRouter (VM ${NEXTROUTER_VM_ID}): ${NEXTROUTER_VM_NAME}"
+echo "  - ${ROUTER0_VM_NAME} (VM ${ROUTER0_VM_ID})"
+echo "  - ${ROUTER1_VM_NAME} (VM ${ROUTER1_VM_ID})"
+echo "  - ${NEXTROUTER_VM_NAME} (VM ${NEXTROUTER_VM_ID})"
 echo "=== LAN0 VMs ==="
-echo "  - LAN0 VM 1 (VM ${LAN0_VM1_ID}): ${LAN0_VM1_NAME}"
-echo "  - LAN0 VM 2 (VM ${LAN0_VM2_ID}): ${LAN0_VM2_NAME}"
-echo "  - LAN0 VM 3 (VM ${LAN0_VM3_ID}): ${LAN0_VM3_NAME}"
+echo "  - ${LAN0_VM1_NAME} (VM ${LAN0_VM1_ID})"
+echo "  - ${LAN0_VM2_NAME} (VM ${LAN0_VM2_ID})"
+echo "  - ${LAN0_VM3_NAME} (VM ${LAN0_VM3_ID})"
 echo ""
 echo "Network bridges are still configured:"
+echo "  - ${GATEWAY_BRIDGE} (Gateway network)"
 echo "  - ${WAN1_BRIDGE} (First WAN network)"
 echo "  - ${WAN2_BRIDGE} (Second WAN network)"
 echo "  - ${UNUSED_BRIDGE} (Additional bridge)"

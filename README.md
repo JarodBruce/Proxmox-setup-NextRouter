@@ -38,7 +38,7 @@ The script creates a complex network topology with the following components:
                                 ↓                                                         ↓
         [Gateway(172.16.0.1)] ←→ [172.16.0.10, 172.16.0.20]                   [LAN0 VMs (192.168.1.101-103)]
                                 ↑                                                         ↑
-                        [vmbr0(10.40.x.x/20)]                                [lan0 (192.168.1.x)]
+    [インターネット]  ←→  [vmbr0(10.40.x.x/20)]                                     [lan0 (192.168.1.x)]
                                 ↓                                                         ↓
         [Gateway(172.16.0.1)] ←→ [172.16.0.10, 172.16.0.20]                   [LAN0 VMs (192.168.1.101-103)]
                                 ↑                                                         ↑

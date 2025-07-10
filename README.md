@@ -30,7 +30,7 @@ The script creates a complex network topology with the following components:
 
 ## Network Diagram
 ```
-                                                　　 [iPerf(172.18.0.101)]
+                                                　　 [iPerf(172.18.0.10)]
                                                                ↑
                      [ubuntu-router-0(172.18.0.1)] ←[wan0(172.18.0.x/24)]→ [NextRouter(172.18.0.100{dhcp})]
                                 ↑                                                         ↑
@@ -46,7 +46,7 @@ The script creates a complex network topology with the following components:
                                 ↓                                                         ↓
                      [ubuntu-router-1(172.17.0.1)] ←[wan1(172.17.0.x/24)]→ [NextRouter(172.17.0.100{dhcp})]
                                                                ↓
-                                                　　 [iPerf(172.17.0.101)]
+                                                　　 [iPerf(172.17.0.10)]
 ```
 
 ## Performance Testing

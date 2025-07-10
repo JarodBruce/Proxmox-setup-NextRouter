@@ -16,8 +16,22 @@ This script automates the creation of multiple Ubuntu VMs on Proxmox, configured
    ./delete_ubuntu_routers.sh
    ```
 
-## Configuration
+## Network Topology
+
+The script creates a complex network topology with the following components:
+
+- **Gateway**: Main router connecting to the internet (vmbr0 ↔ gateway0)
+- **Router 0**: Second-tier router (gateway0 ↔ wan0)
+- **Router 1**: Second-tier router (gateway0 ↔ wan1)
+- **NextRouter**: Multi-homed bridge router (wan0 ↔ wan1 ↔ lan0)
+- **iPerf-0**: Performance testing VM on wan0 network
+- **iPerf-1**: Performance testing VM on wan1 network
+- **LAN0 VMs**: Three client VMs on the lan0 network
+
+## Network Diagram
 ```
+                                                　　 [iPerf(172.18.0.101)]
+                                                               ↑
                      [ubuntu-router-0(172.18.0.1)] ←[wan0(172.18.0.x/24)]→ [NextRouter(172.18.0.100{dhcp})]
                                 ↑                                                         ↑
                         [gateway0(172.16.0.x/24)]                            [lan0 (192.168.1.x)]
@@ -31,6 +45,28 @@ This script automates the creation of multiple Ubuntu VMs on Proxmox, configured
                         [gateway0(172.16.0.x/24)]                            [lan0 (192.168.1.x)]
                                 ↓                                                         ↓
                      [ubuntu-router-1(172.17.0.1)] ←[wan1(172.17.0.x/24)]→ [NextRouter(172.17.0.100{dhcp})]
+                                                               ↓
+                                                　　 [iPerf(172.17.0.101)]
+```
+
+## Performance Testing
+
+The iPerf VMs are pre-configured with iPerf3 for network performance testing:
+
+- **iPerf-0** (VM 9008): Connected to wan0 network for testing Router 0 performance
+- **iPerf-1** (VM 9009): Connected to wan1 network for testing Router 1 performance
+
+### iPerf3 Usage Examples
+
+```bash
+# Server mode (automatically started on boot)
+systemctl status iperf3-server
+
+# Client mode examples
+iperf3 -c <server_ip>                    # Basic bandwidth test
+iperf3 -c <server_ip> -u                 # UDP test
+iperf3 -c <server_ip> -t 60              # 60-second test
+iperf3 -c <server_ip> -b 100M             # Limit bandwidth to 100 Mbps
 ```
 
 ## Default Credentials

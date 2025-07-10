@@ -21,6 +21,17 @@ ssh_authorized_keys:
   - ${SSH_PUBLIC_KEY}
 
 runcmd:
+  # 0. Debug information
+  - |
+    echo "=== Gateway VM Cloud-Init Debug Info ==="
+    echo "Hostname: $(hostname)"
+    echo "Date: $(date)"
+    echo "User: $(whoami)"
+    echo "Current working directory: $(pwd)"
+    echo "Network interfaces before configuration:"
+    ip addr show
+    echo "=== Starting Gateway Configuration ==="
+    
   # 0. Configure SSH for password authentication only
   - |
     cat > /etc/ssh/sshd_config << 'EOSSH'
@@ -50,6 +61,16 @@ runcmd:
 
   # 2. Configure DHCP Server for gateway0 network
   - |
+    echo "=== DHCP Configuration Variables ==="
+    echo "subnet_network: ${subnet_network}"
+    echo "subnet_mask: ${subnet_mask}"
+    echo "dhcp_start: ${dhcp_start}"
+    echo "dhcp_end: ${dhcp_end}"
+    echo "router_ip: ${router_ip}"
+    echo "broadcast_ip: ${broadcast_ip}"
+    echo "dns_servers: ${dns_servers}"
+    echo "=== Creating DHCP Configuration ==="
+    
     cat > /etc/dhcp/dhcpd.conf << 'EODHCP'
     # Global DHCP configuration
     default-lease-time 600;
@@ -64,6 +85,9 @@ runcmd:
       option broadcast-address ${broadcast_ip};
     }
     EODHCP
+    
+    echo "DHCP configuration created:"
+    cat /etc/dhcp/dhcpd.conf
 
   # 3. Configure DHCP server to listen on eth1 (gateway0 interface)
   - echo 'INTERFACESv4="eth1"' > /etc/default/isc-dhcp-server
@@ -123,12 +147,91 @@ runcmd:
     }
     EONFT
 
+  # 4.1. Set proper permissions for nftables config
+  - chmod 755 /etc/nftables.conf
+  
+  # 4.2. Test nftables configuration syntax
+  - |
+    echo "=== Testing nftables configuration ==="
+    echo "Configuration file content:"
+    cat /etc/nftables.conf
+    echo ""
+    echo "Testing syntax..."
+    if ! nft -c -f /etc/nftables.conf; then
+      echo "ERROR: nftables configuration syntax error!"
+      cat /etc/nftables.conf
+      exit 1
+    fi
+    echo "nftables configuration syntax is valid."
+
   # 5. Enable and start services
   - systemctl enable nftables
-  - systemctl restart nftables
+  - systemctl stop nftables || true
+  - systemctl start nftables
+  
+  # 5.1. Verify nftables is running
+  - |
+    echo "=== Checking nftables status ==="
+    systemctl status nftables --no-pager
+    echo ""
+    echo "=== Current nftables ruleset ==="
+    nft list ruleset
+    echo ""
+    echo "=== Verifying IP forwarding ==="
+    sysctl net.ipv4.ip_forward
+    echo ""
+  
   - systemctl enable isc-dhcp-server
   
   # 6. Wait for network to be ready and start DHCP server
-  - sleep 15
+  - |
+    echo "Waiting for network interfaces to be ready..."
+    sleep 15
+    echo "Network interfaces status:"
+    ip addr show
+    echo "Starting DHCP server..."
+    
   - systemctl start isc-dhcp-server
-  - systemctl status isc-dhcp-server
+  
+  # 6.1. Check DHCP server status and troubleshoot if needed
+  - |
+    echo "Checking DHCP server status..."
+    if systemctl is-active --quiet isc-dhcp-server; then
+      echo "DHCP server is running successfully."
+      systemctl status isc-dhcp-server
+    else
+      echo "DHCP server failed to start. Checking logs..."
+      journalctl -u isc-dhcp-server --no-pager -n 20
+      echo "DHCP configuration file:"
+      cat /etc/dhcp/dhcpd.conf
+      echo "DHCP server interface configuration:"
+      cat /etc/default/isc-dhcp-server
+      echo "Attempting to restart DHCP server..."
+      systemctl restart isc-dhcp-server
+    fi
+
+  # 7. Final status check
+  - |
+    echo "=== Final Gateway Configuration Status ==="
+    echo "Date: $(date)"
+    echo ""
+    echo "IP Forwarding status:"
+    sysctl net.ipv4.ip_forward
+    echo ""
+    echo "Network interfaces:"
+    ip addr show
+    echo ""
+    echo "Routing table:"
+    ip route show
+    echo ""
+    echo "nftables ruleset:"
+    nft list ruleset
+    echo ""
+    echo "DHCP server status:"
+    systemctl status isc-dhcp-server --no-pager
+    echo ""
+    echo "DHCP server configuration:"
+    cat /etc/dhcp/dhcpd.conf
+    echo ""
+    echo "=== Gateway VM configuration completed ==="
+    echo "Check /var/log/cloud-init-output.log for full details"

@@ -36,6 +36,9 @@ echo "=== Router VMs ==="
 echo "  - ${ROUTER0_VM_NAME} (VM ${ROUTER0_VM_ID})"
 echo "  - ${ROUTER1_VM_NAME} (VM ${ROUTER1_VM_ID})"
 echo "  - ${NEXTROUTER_VM_NAME} (VM ${NEXTROUTER_VM_ID})"
+echo "=== iPerf VMs ==="
+echo "  - ${IPERF0_VM_NAME} (VM ${IPERF0_VM_ID})"
+echo "  - ${IPERF1_VM_NAME} (VM ${IPERF1_VM_ID})"
 echo "=== LAN0 VMs ==="
 echo "  - ${LAN0_VM1_NAME} (VM ${LAN0_VM1_ID})"
 echo "  - ${LAN0_VM2_NAME} (VM ${LAN0_VM2_ID})"
@@ -112,6 +115,32 @@ echo "Deleting NextRouter VM..."
 ) &
 DELETE_PIDS+=($!)
 
+# Stop and destroy iPerf VMs in parallel
+echo "Deleting iPerf VMs in parallel..."
+(
+    if qm status ${IPERF0_VM_ID} >/dev/null 2>&1; then
+        echo "Stopping and deleting iPerf-0 (VM ${IPERF0_VM_ID})..."
+        qm stop ${IPERF0_VM_ID} --timeout 60 || true
+        qm destroy ${IPERF0_VM_ID}
+        echo "✓ iPerf-0 (VM ${IPERF0_VM_ID}) deleted."
+    else
+        echo "⚠ iPerf-0 (VM ${IPERF0_VM_ID}) not found."
+    fi
+) &
+DELETE_PIDS+=($!)
+
+(
+    if qm status ${IPERF1_VM_ID} >/dev/null 2>&1; then
+        echo "Stopping and deleting iPerf-1 (VM ${IPERF1_VM_ID})..."
+        qm stop ${IPERF1_VM_ID} --timeout 60 || true
+        qm destroy ${IPERF1_VM_ID}
+        echo "✓ iPerf-1 (VM ${IPERF1_VM_ID}) deleted."
+    else
+        echo "⚠ iPerf-1 (VM ${IPERF1_VM_ID}) not found."
+    fi
+) &
+DELETE_PIDS+=($!)
+
 # Stop and destroy LAN0 VMs in parallel
 echo "Deleting LAN0 VMs in parallel..."
 (
@@ -167,7 +196,7 @@ echo
 # Clean up cloud-init files
 echo "Cleaning up cloud-init files..."
 removed_files=0
-for file in /var/lib/vz/snippets/ci-${GATEWAY_VM_ID}-*.yaml /var/lib/vz/snippets/ci-${ROUTER0_VM_ID}-*.yaml /var/lib/vz/snippets/ci-${ROUTER1_VM_ID}-*.yaml /var/lib/vz/snippets/ci-${NEXTROUTER_VM_ID}-*.yaml /var/lib/vz/snippets/ci-${LAN0_VM1_ID}-*.yaml /var/lib/vz/snippets/ci-${LAN0_VM2_ID}-*.yaml /var/lib/vz/snippets/ci-${LAN0_VM3_ID}-*.yaml; do
+for file in /var/lib/vz/snippets/ci-${GATEWAY_VM_ID}-*.yaml /var/lib/vz/snippets/ci-${ROUTER0_VM_ID}-*.yaml /var/lib/vz/snippets/ci-${ROUTER1_VM_ID}-*.yaml /var/lib/vz/snippets/ci-${NEXTROUTER_VM_ID}-*.yaml /var/lib/vz/snippets/ci-${IPERF0_VM_ID}-*.yaml /var/lib/vz/snippets/ci-${IPERF1_VM_ID}-*.yaml /var/lib/vz/snippets/ci-${LAN0_VM1_ID}-*.yaml /var/lib/vz/snippets/ci-${LAN0_VM2_ID}-*.yaml /var/lib/vz/snippets/ci-${LAN0_VM3_ID}-*.yaml; do
     if [[ -f "$file" ]]; then
         rm -f "$file"
         echo "✓ Removed: $(basename "$file")"
@@ -192,6 +221,9 @@ echo "=== Router VMs ==="
 echo "  - ${ROUTER0_VM_NAME} (VM ${ROUTER0_VM_ID})"
 echo "  - ${ROUTER1_VM_NAME} (VM ${ROUTER1_VM_ID})"
 echo "  - ${NEXTROUTER_VM_NAME} (VM ${NEXTROUTER_VM_ID})"
+echo "=== iPerf VMs ==="
+echo "  - ${IPERF0_VM_NAME} (VM ${IPERF0_VM_ID})"
+echo "  - ${IPERF1_VM_NAME} (VM ${IPERF1_VM_ID})"
 echo "=== LAN0 VMs ==="
 echo "  - ${LAN0_VM1_NAME} (VM ${LAN0_VM1_ID})"
 echo "  - ${LAN0_VM2_NAME} (VM ${LAN0_VM2_ID})"

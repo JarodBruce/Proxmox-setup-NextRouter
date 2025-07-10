@@ -1,10 +1,11 @@
 #cloud-config
 package_update: true
 packages:
-  - net-tools
   - curl
   - wget
   - htop
+  - net-tools
+  - iperf3
 
 # SSH configuration
 ssh_pwauth: true
@@ -23,6 +24,7 @@ ssh_authorized_keys:
   - ${SSH_PUBLIC_KEY}
 
 runcmd:
+  # 0. Configure SSH for password authentication only
   - |
     cat > /etc/ssh/sshd_config << 'EOSSH'
     Port 22
@@ -48,3 +50,29 @@ runcmd:
     if [ -n "${dns_servers}" ]; then
       echo "nameserver $(echo ${dns_servers} | sed 's/,/\nnameserver /g')" > /etc/resolv.conf
     fi
+  
+  # 2. Install and configure iperf3
+  - apt-get install -y iperf3
+  
+  # 3. Create iperf3 service for server mode
+  - |
+    cat > /etc/systemd/system/iperf3-server.service << 'EOIPERF'
+    [Unit]
+    Description=iPerf3 Server
+    After=network.target
+    
+    [Service]
+    Type=simple
+    User=nobody
+    ExecStart=/usr/bin/iperf3 -s
+    Restart=always
+    RestartSec=5
+    
+    [Install]
+    WantedBy=multi-user.target
+    EOIPERF
+  
+  # 4. Enable and start iperf3 server
+  - systemctl daemon-reload
+  - systemctl enable iperf3-server
+  - systemctl start iperf3-server

@@ -4,16 +4,18 @@
 # Proxmox Ubuntu Router Auto-Deploy Script (Parallel Edition)
 # ==============================================================================
 #
-# This script automates the creation of seven Ubuntu VMs on Proxmox,
+# This script automates the creation of nine Ubuntu VMs on Proxmox,
 # configured to act as routers and clients using cloud-init and nftables.
 #
 # What it does:
 # 1. Creates four new Linux Bridges on the Proxmox host: gateway0, wan0, wan1, lan0.
-# 2. Creates seven Ubuntu VMs in parallel from a specified cloud-init ready template:
+# 2. Creates nine Ubuntu VMs in parallel from a specified cloud-init ready template:
 #    - Gateway: Connected to vmbr0 ↔ gateway0 (main gateway with NAPT)
 #    - Router 0: Connected to gateway0 ↔ wan0
 #    - Router 1: Connected to gateway0 ↔ wan1
 #    - NextRouter: Connected to wan0 ↔ wan1 ↔ lan0 (multi-homed bridge)
+#    - iPerf-0: Connected to wan0 (performance testing on wan0 network)
+#    - iPerf-1: Connected to wan1 (performance testing on wan1 network)
 #    - LAN0 VM 1-3: Connected to lan0 (client VMs)
 # 3. Uses cloud-init to:
 #    - Set the hostname, user, and inject an SSH public key.
@@ -50,6 +52,7 @@ echo "Template VM ID: ${TEMPLATE_VM_ID}"
 echo "Gateway VM: ${GATEWAY_VM_ID} (${GATEWAY_VM_NAME})"
 echo "Router VMs: ${ROUTER0_VM_ID} (${ROUTER0_VM_NAME}), ${ROUTER1_VM_ID} (${ROUTER1_VM_NAME})"
 echo "NextRouter VM: ${NEXTROUTER_VM_ID} (${NEXTROUTER_VM_NAME})"
+echo "iPerf VMs: ${IPERF0_VM_ID} (${IPERF0_VM_NAME}), ${IPERF1_VM_ID} (${IPERF1_VM_NAME})"
 echo "LAN0 VMs: ${LAN0_VM1_ID}, ${LAN0_VM2_ID}, ${LAN0_VM3_ID}"
 echo "VM Resources: ${MEMORY}MB RAM, ${CORES} cores, ${DISK_SIZE} disk"
 echo "Bridges: ${LAN_BRIDGE}, ${GATEWAY_BRIDGE}, ${WAN1_BRIDGE}, ${WAN2_BRIDGE}, ${UNUSED_BRIDGE}"
@@ -452,6 +455,88 @@ create_lan0_vm() {
     echo
 }
 
+# Function to create iPerf VM (connected to WAN networks for performance testing)
+create_iperf_vm() {
+    local vm_id=$1
+    local vm_name=$2
+    local bridge=$3
+    local ip_cidr=$4
+    local gateway=$5
+    local dns_servers=$6
+    
+    echo "Creating iPerf VM ${vm_id} (${vm_name}) on bridge ${bridge}..."
+    
+    # Stop and destroy the VM if it already exists to ensure a clean slate
+    if qm status ${vm_id} >/dev/null 2>&1; then
+        echo "VM ${vm_id} already exists. Stopping and destroying it for a fresh start."
+        qm stop ${vm_id} --timeout 60 || true # Allow failure if already stopped
+        qm destroy ${vm_id}
+        # Wait for cleanup to complete
+        sleep 2
+    fi
+
+    echo "Cloning template ${TEMPLATE_VM_ID} to new VM ${vm_id}..."
+    qm clone ${TEMPLATE_VM_ID} ${vm_id} --name "${vm_name}" --full
+    
+    # Wait a moment for the clone operation to complete
+    sleep 2
+    
+    echo "Configuring VM resources..."
+    qm resize ${vm_id} scsi0 ${DISK_SIZE}
+    qm set ${vm_id} --memory ${MEMORY} --cores ${CORES}
+    
+    # Set display to Standard VGA
+    echo "Setting display to Standard VGA for VM ${vm_id}..."
+    qm set ${vm_id} --vga std
+    
+    # Cloud-Init User configuration
+    qm set ${vm_id} --ciuser "${USER_NAME}"
+    echo "Setting password authentication for iPerf VM ${vm_id}..."
+    qm set ${vm_id} --cipassword "password"
+
+    # Network configuration - single interface on specified bridge
+    echo "Setting network interface for VM ${vm_id}..."
+    echo "  - eth0: ${bridge} - ${ip_cidr}, gateway: ${gateway}"
+    
+    # Configure ipconfig with gateway if specified
+    if [ "${ip_cidr}" = "dhcp" ]; then
+        qm set ${vm_id} --ipconfig0 "ip=dhcp"
+    elif [ -n "${gateway}" ] && [ "${gateway}" != "" ]; then
+        qm set ${vm_id} --ipconfig0 "ip=${ip_cidr},gw=${gateway}"
+    else
+        qm set ${vm_id} --ipconfig0 "ip=${ip_cidr}"
+    fi
+
+    # Set DNS only if not using DHCP
+    if [ "${ip_cidr}" != "dhcp" ]; then
+        qm set ${vm_id} --nameserver "${dns_servers}"
+        qm set ${vm_id} --searchdomain "${DOMAIN_NAME}"
+    fi
+
+    # iPerf cloud-init script
+    temp_ci_file=$(mktemp)
+    snippet_filename="ci-${vm_id}-$(basename ${temp_ci_file}).yaml"
+    
+    # Export variables for envsubst
+    export USER_NAME SSH_PUBLIC_KEY dns_servers
+
+    # Process cloud-config template
+    process_cloud_config_template "$(dirname "$0")/${IPERF_CLOUD_CONFIG}" "${temp_ci_file}"
+
+    echo "Applying custom cloud-init configuration for VM ${vm_id}..."
+    qm set ${vm_id} --cicustom "vendor=local:snippets/${snippet_filename}"
+    mv "${temp_ci_file}" "/var/lib/vz/snippets/${snippet_filename}"
+
+    # Attach network device to specified bridge with unique MAC address
+    echo "Attaching network interface to VM ${vm_id}..."
+    local mac_addr=$(generate_mac_address ${vm_id} 0)
+    echo "  - eth0: ${bridge} - MAC: ${mac_addr}"
+    qm set ${vm_id} --net0 virtio,bridge=${bridge},macaddr=${mac_addr}
+    
+    echo "VM ${vm_id} (${vm_name}) configured successfully."
+    echo
+}
+
 # Function to create Gateway VM (connected to vmbr0 ↔ gateway0)
 create_gateway_vm() {
     local vm_id=$1
@@ -629,9 +714,21 @@ BATCH2_PIDS+=($!)
 
 wait_for_batch "Batch 2" "${BATCH2_PIDS[@]}"
 
-# Batch 3: Remaining LAN0 VM
-echo "Creating Batch 3: LAN0-VM3"
+# Batch 3: iPerf VMs + LAN0 VM
+echo "Creating Batch 3: iPerf-0, iPerf-1, LAN0-VM3"
 declare -a BATCH3_PIDS=()
+
+(
+    create_iperf_vm "${IPERF0_VM_ID}" "${IPERF0_VM_NAME}" \
+        "${WAN1_BRIDGE}" "${IPERF0_LAN_IP_CIDR}" "${IPERF0_LAN_GATEWAY}" "${IPERF0_DNS}"
+) &
+BATCH3_PIDS+=($!)
+
+(
+    create_iperf_vm "${IPERF1_VM_ID}" "${IPERF1_VM_NAME}" \
+        "${WAN2_BRIDGE}" "${IPERF1_LAN_IP_CIDR}" "${IPERF1_LAN_GATEWAY}" "${IPERF1_DNS}"
+) &
+BATCH3_PIDS+=($!)
 
 (
     create_lan0_vm "${LAN0_VM3_ID}" "${LAN0_VM3_NAME}" \
@@ -671,6 +768,10 @@ START_PIDS+=($!)
 START_PIDS+=($!)
 ( start_vm ${NEXTROUTER_VM_ID} ) &
 START_PIDS+=($!)
+( start_vm ${IPERF0_VM_ID} ) &
+START_PIDS+=($!)
+( start_vm ${IPERF1_VM_ID} ) &
+START_PIDS+=($!)
 ( start_vm ${LAN0_VM1_ID} ) &
 START_PIDS+=($!)
 ( start_vm ${LAN0_VM2_ID} ) &
@@ -704,6 +805,10 @@ echo "  - NextRouter (${NEXTROUTER_VM_NAME}): VM ${NEXTROUTER_VM_ID}"
 echo "    - WAN0 (eth0): ${NEXTROUTER_WAN0_IP_CIDR} on ${WAN1_BRIDGE}"
 echo "    - WAN1 (eth1): ${NEXTROUTER_WAN1_IP_CIDR} on ${WAN2_BRIDGE}"
 echo "    - LAN0 (eth2): ${NEXTROUTER_LAN0_IP_CIDR} on ${UNUSED_BRIDGE}"
+echo "  - iPerf-0 (${IPERF0_VM_NAME}): VM ${IPERF0_VM_ID}"
+echo "    - WAN0 (eth0): ${IPERF0_LAN_IP_CIDR} on ${WAN1_BRIDGE}"
+echo "  - iPerf-1 (${IPERF1_VM_NAME}): VM ${IPERF1_VM_ID}"
+echo "    - WAN1 (eth0): ${IPERF1_LAN_IP_CIDR} on ${WAN2_BRIDGE}"
 echo "  - LAN0 VM 1 (${LAN0_VM1_NAME}): VM ${LAN0_VM1_ID} on ${UNUSED_BRIDGE}"
 echo "  - LAN0 VM 2 (${LAN0_VM2_NAME}): VM ${LAN0_VM2_ID} on ${UNUSED_BRIDGE}"
 echo "  - LAN0 VM 3 (${LAN0_VM3_NAME}): VM ${LAN0_VM3_ID} on ${UNUSED_BRIDGE}"

@@ -30,23 +30,15 @@ The script creates a complex network topology with the following components:
 
 ## Network Diagram
 ```
-                                                　　 [iPerf(172.18.0.10)]
-                                                               ↑
-                     [ubuntu-router-0(172.18.0.1)] ←[wan0(172.18.0.x/24)]→ [NextRouter(172.18.0.100{dhcp})]
-                                ↑                                                         ↑
-                        [gateway0(172.16.0.x/24)]                            [lan0 (192.168.1.x)]
-                                ↓                                                         ↓
-        [Gateway(172.16.0.1)] ←→ [172.16.0.10, 172.16.0.20]                   [LAN0 VMs (192.168.1.101-103)]
-                                ↑                                                         ↑
-    [インターネット]  ←→  [vmbr0(10.40.x.x/20)]                                     [lan0 (192.168.1.x)]
-                                ↓                                                         ↓
-        [Gateway(172.16.0.1)] ←→ [172.16.0.10, 172.16.0.20]                   [LAN0 VMs (192.168.1.101-103)]
-                                ↑                                                         ↑
-                        [gateway0(172.16.0.x/24)]                            [lan0 (192.168.1.x)]
-                                ↓                                                         ↓
-                     [ubuntu-router-1(172.17.0.1)] ←[wan1(172.17.0.x/24)]→ [NextRouter(172.17.0.100{dhcp})]
-                                                               ↓
-                                                　　 [iPerf(172.17.0.10)]
+                                                                        　[iPerf(172.18.0.10)]
+                                                                                   ↑
+                                        [ubuntu-router-0(172.18.0.1)] ←→ [wan0(172.18.0.x/24)]
+                                                        ↑                            ↓
+ [インターネット] ←→ [vmbr0(10.40.x.x/20)] ←→ [gateway0(172.16.0.x/24)]   [NextRouter(172.y.0.100{dhcp})] ←→ [lan0 (192.168.1.x)] ←→ [LAN0 VMs (192.168.1.101-103)]
+                                                        ↓                            ↑
+                                        [ubuntu-router-1(172.17.0.1)] ←→　[wan1(172.17.0.x/24)]
+                                                                                   ↓
+                                                                         [iPerf(172.17.0.10)]
 ```
 
 ## Performance Testing
